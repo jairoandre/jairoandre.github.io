@@ -3,7 +3,7 @@
  * the standard input according to the problem statement.
  **/
 
-var _ENV = 'prod'
+var _ENV = 'dev'
 var _POD_RADII_2 = Math.pow(400, 2)
 var _MAX_SPEED = 1127
 var _CP_RADII = 600
