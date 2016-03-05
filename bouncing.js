@@ -1,12 +1,26 @@
 'use strict'
+
+// ///////////////////
+// CONSTANTS
+// ///////////////////
+
+var RAD18 = 18 * Math.PI / 180
+var CP_RADII = 600
+var POD_RADII = 400
+
 // ///////////////////
 // VECTOR CLASS
 // ///////////////////
+
 class Vector {
 
   constructor (x, y) {
     this.x = x
     this.y = y
+  }
+
+  get () {
+    return new Vector(this.x, this.y)
   }
 
   add (v) {
@@ -23,6 +37,10 @@ class Vector {
 
   div (n) {
     return new Vector(this.x / n, this.y / n)
+  }
+
+  dist (v) {
+    return Math.sqrt(Math.pow(v.x - this.x, 2) + Math.pow(v.y - this.y, 2))
   }
 
   mag () {
@@ -53,6 +71,37 @@ class Vector {
     return Math.atan2(this.y, this.x)
   }
 
+  headingDegree () {
+    return toDegrees(this.heading())
+  }
+
+  toPolar () {
+    return new Polar(this.mag(), this.heading() * Math.PI / 180)
+  }
+
+}
+
+// ///////////////////
+// CHECKPOINT CLASS
+// ///////////////////
+
+class Polar {
+
+  constructor (r, theta) {
+    this.r = r
+    this.theta = theta
+    this.thetaInRadians = toRadians(theta)
+  }
+
+  toVector () {
+    return new Vector(this.r * Math.cos(this.thetaInRadians), this.r * Math.sin(this.thetaInRadians))
+  }
+
+  setTheta (theta) {
+    this.theta = theta
+    this.thetaInRadians = toRadians(theta)
+    return this
+  }
 }
 
 // ///////////////////
@@ -61,9 +110,10 @@ class Vector {
 
 class CheckPoint {
 
-  constructor (position) {
+  constructor (id, position) {
+    this.id = id
     this.position = position
-    this.radius = 600
+    this.radius = CP_RADII
   }
 
   draw (canvas) {
@@ -77,6 +127,10 @@ class CheckPoint {
     ctx.stroke()
     ctx.fillStyle = 'rgba(120, 100, 255, 0.5)'
     ctx.fill()
+    ctx.beginPath()
+    ctx.font = '150px Arial'
+    ctx.fillStyle = '#fff'
+    ctx.fillText('CPid: ' + this.id, 0, 0)
     ctx.restore()
   }
 
@@ -88,25 +142,25 @@ class CheckPoint {
 
 class Pod {
 
-  constructor (position, velocity, thrust, angle) {
+  constructor (position, velocity, thrust, angle, currentCPId, checkpoints, lastthrust) {
     this.position = position
     this.velocity = velocity
     this.thrust = thrust
     this.angle = angle
+    this.currentCPId = currentCPId === undefined ? 1 : currentCPId
+    this.checkpoints = checkpoints === undefined ? [] : checkpoints
     this.mass = 1
-    this.radius = 400
+    this.radius = POD_RADII
     this.maxspeed = 1127
     this.maxthrust = 200
     this.frictionCoeficient = 0.85
     this.angleVelocity = 0
     this.angleAcceleration = 0
-    this.currentCPId = 1
-    this.checkpoints = []
-    this.timeFactor = 1
+    this.lastthrust = lastthrust === undefined ? 0 : lastthrust
   }
 
-  setTimeFactor (timeFactor) {
-    this.timeFactor = timeFactor
+  get () {
+    return new Pod(this.position.get(), this.velocity.get(), this.thrust.get(), this.angle, this.currentCPId, this.checkpoints, this.lastthrust, this.maxthrust)
   }
 
   setCurrentCPId (currentCPId) {
@@ -138,15 +192,23 @@ class Pod {
   }
 
   update () {
-    this.velocity = this.velocity.add(this.thrust).mult(this.frictionCoeficient)
-    this.position = this.position.add(this.velocity.mult(this.timeFactor))
-    this.angleVelocity += this.angleAccelarion
-    this.angle += this.angleVelocity
-    this.thrust = this.thrust.mult(0)
+    var copy = this.get()
+    copy.velocity = copy.velocity.add(copy.thrust).mult(copy.frictionCoeficient)
+    copy.position = copy.position.add(copy.velocity)
+    copy.lastthrust = copy.thrust.mag()
+    copy.thrust = copy.thrust.mult(0)
+    if (copy.innerCP()) {
+      copy.currentCPId = (copy.currentCPId + 1) % copy.checkpoints.length
+    }
+    return copy
   }
 
   innerCP () {
-    return this.position.sub(this.checkpoints[this.currentCPId].position).mag() <= 600
+    return this.position.sub(this.getCurrentCP().position).mag() <= CP_RADII
+  }
+
+  getCurrentCP () {
+    return this.checkpoints[this.currentCPId]
   }
 
   draw (canvas) {
@@ -163,9 +225,9 @@ class Pod {
     ctx.fill()
     ctx.beginPath()
     ctx.moveTo(this.radius, 0)
-    ctx.lineTo(0, this.radius / 2)
-    ctx.lineTo(0, -this.radius / 2)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'
+    ctx.lineTo(0, this.radius / 5)
+    ctx.lineTo(0, -this.radius / 5)
+    ctx.fillStyle = 'rgba(0, 0, 255, 0.5)'
     ctx.fill()
     ctx.restore()
   }
@@ -189,11 +251,15 @@ class Pod {
   }
 
   applyForce (force) {
-    this.thrust = this.thrust.add(force.div(this.mass))
+    var copy = this.get()
+    copy.thrust = this.thrust.add(force.div(this.mass))
+    return copy
   }
 
   applyFriction () {
-    this.velocity = this.velocity.mult(this.frictionCoeficient)
+    var copy = this.get()
+    copy.velocity = this.velocity.mult(this.frictionCoeficient)
+    return copy
   }
 
   createHtmlElement (element, text) {
@@ -204,9 +270,16 @@ class Pod {
 
   displayInfo (div) {
     div.appendChild(this.createHtmlElement('p', 'Position: ' + '(' + Math.round(this.position.x) + ', ' + Math.round(this.position.y) + ')'))
-    div.appendChild(this.createHtmlElement('p', 'Magnitude: ' + Math.trunc(this.velocity.mag())))
+    div.appendChild(this.createHtmlElement('p', 'Velocity: ' + Math.trunc(this.velocity.mag())))
+    div.appendChild(this.createHtmlElement('p', 'Thrust: ' + Math.trunc(this.lastthrust)))
   }
 
+  seekForCP () {
+    var desired = this.getCurrentCP().position.sub(this.position).normalize().mult(this.maxspeed)
+    console.log(toDegrees(this.getCurrentCP().position.angleBetween(this.position)))
+    var steer = desired.sub(this.velocity).limit(this.maxthrust)
+    return this.applyForce(steer)
+  }
 }
 
 // ///////////////////
@@ -223,6 +296,14 @@ function getRandomPosition (xmin, xmax, ymin, ymax) {
 
 function getRandomInt (min, max) {
   return Math.random() * (max - min) + min
+}
+
+function toRadians (degree) {
+  return degree * Math.PI / 180
+}
+
+function toDegrees (radians) {
+  return radians * 180 / Math.PI
 }
 
 var VECTOR_ZERO = new Vector(0, 0)
@@ -242,15 +323,6 @@ if (PROD_ENV) {
     var checkpointX = parseInt(inputs[0])
     var checkpointY = parseInt(inputs[1])
     checkpoints.push(new Vector(checkpointX, checkpointY))
-  }
-
-  Pod.prototype.seek = function () {
-    var desired = this.currentCP.sub(this.position).normalize().mult(this.maxspeed)
-    var steer = desired.sub(this.velocity).limit(this.maxthrust)
-    this.applyForce(steer)
-    var thrust = this.thrust.mag()
-    this.update()
-    print(Math.round(this.position.x) + ' ' + Math.round(this.position.y) + ' ' + thrust)
   }
 
   // game loop
@@ -279,7 +351,7 @@ if (PROD_ENV) {
     // Write an action using print()
     // To debug: printErr('Debug messages...')
 
-    pods[0].seek()
+    pods[0].makeAMove()
     print('8000 4500 SHIELD')
   }
 }
@@ -292,7 +364,7 @@ if (!PROD_ENV) {
   var generateCheckPoints = function (n) {
     var array = []
     for (var i = 0; i < n; i++) {
-      array.push(new CheckPoint(getRandomPosition(1200, 14000, 1200, 7800)))
+      array.push(new CheckPoint(i, getRandomPosition(1200, 14000, 1200, 7800)))
     }
     return array
   }
@@ -300,30 +372,34 @@ if (!PROD_ENV) {
   var generatePods = function (n) {
     var array = []
     for (var i = 0; i < n; i++) {
-      array.push(new Pod(getRandom2D(0, 100), VECTOR_ZERO, VECTOR_ZERO))
-      array[i].setCheckpoints(checkpoints)
+      array.push(new Pod(getRandomPosition(1200, 14000, 1200, 7800), VECTOR_ZERO, VECTOR_ZERO, -1, 1, checkpoints))
     }
     return array
   }
 
-  checkpoints = generateCheckPoints(4)
+  checkpoints = generateCheckPoints(3)
   pods = generatePods(1)
 
-  var thrust = 100
+  var fps = 1
+  var now
+  var then = Date.now()
+  var interval = 1000 / fps
+  var delta
 
-  var timeFactor = 1
+  var thrust = 200
 
   var thrustInput = document.getElementById('thrust')
 
   thrustInput.value = thrust
 
-  var timeFactorInput = document.getElementById('timeFactorInput')
+  var fpsInput = document.getElementById('fps')
 
-  timeFactorInput.value = 1
+  fpsInput.value = fps
 
   document.getElementById('button').onclick = function () {
     thrust = thrustInput.value
-    timeFactor = timeFactorInput.value
+    fps = fpsInput.value
+    interval = 1000 / fps
   }
 
   var drawFollowingBall = function () {
@@ -333,18 +409,9 @@ if (!PROD_ENV) {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.restore()
     for (var i = 0; i < pods.length; i++) {
-      pods[i].setTimeFactor(timeFactor)
-      pods[i].applyForce(checkpoints[pods[i].currentCPId].position.sub(pods[i].position).normalize().mult(thrust))
-      // pods[i].applyForce(mousePosition.sub(pods[i].position).normalize().mult(100))
-      // pods[i].applyForce(new Vector(0.1, 0))
-      // pods[i].applyForce(new Vector(0, 0.5))
-      // pods[i].applyForce(pods[i].friction())
-      pods[i].update()
-      // pods[i].checkEdges(canvas)
+      pods[i].maxthrust = thrust
+      pods[i] = pods[i].seekForCP().update()
       pods[i].draw(canvas)
-      if (pods[i].innerCP()) {
-        pods[i].setCurrentCPId((pods[i].currentCPId + 1) % checkpoints.length)
-      }
     }
     for (var j = 0; j < checkpoints.length; j++) {
       checkpoints[j].draw(canvas)
@@ -355,28 +422,6 @@ if (!PROD_ENV) {
     pods[0].displayInfo(info)
   // this.thrust = mousePosition.sub(this.position).normalize().mult(0.5)
   }
-
-  var drawBouncingSquare = function () {
-    var canvas = document.getElementById('mycanvas')
-    var ctx = canvas.getContext('2d')
-    ctx.save()
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    ctx.restore()
-    for (var i = 0; i < pods.length; i++) {
-      pods[i].applyForce(new Vector(0.1, 0))
-      pods[i].applyForce(new Vector(0, 0.5))
-      pods[i].applyForce(pods[i].friction())
-      pods[i].update()
-      pods[i].checkEdges(canvas)
-      pods[i].draw(canvas)
-    }
-  }
-
-  var fps = 60
-  var now
-  var then = Date.now()
-  var interval = 1000 / fps
-  var delta
 
   var animate = function (highResTimestamp) {
     requestAnimationFrame(animate)
@@ -402,5 +447,5 @@ if (!PROD_ENV) {
   }
 
   // addMouseEventListener(document.getElementById('mycanvas'))
-  requestAnimationFrame(animate)
+  var frameId = requestAnimationFrame(animate)
 }
