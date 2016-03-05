@@ -276,7 +276,6 @@ class Pod {
 
   seekForCP () {
     var desired = this.getCurrentCP().position.sub(this.position).normalize().mult(this.maxspeed)
-    console.log(toDegrees(this.getCurrentCP().position.angleBetween(this.position)))
     var steer = desired.sub(this.velocity).limit(this.maxthrust)
     return this.applyForce(steer)
   }
@@ -380,13 +379,13 @@ if (!PROD_ENV) {
   checkpoints = generateCheckPoints(3)
   pods = generatePods(1)
 
-  var fps = 1
+  var fps = 60
   var now
   var then = Date.now()
   var interval = 1000 / fps
   var delta
 
-  var thrust = 200
+  var thrust = 60
 
   var thrustInput = document.getElementById('thrust')
 
