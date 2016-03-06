@@ -41,7 +41,9 @@ class Vector {
 
   rotateDegree (angle) {
     var angleInRadians = toRadians(angle)
-    return new Vector(this.x + this.mag() * Math.cos(angleInRadians), this.y + this.mag() * Math.sin(angleInRadians))
+    var sin = Math.sin(angleInRadians)
+    var cos = Math.cos(angleInRadians)
+    return new Vector(this.x * cos - this.y * sin, this.x * sin + this.y * cos)
   }
 
   dist (v) {
@@ -229,7 +231,7 @@ class Pod {
     ctx.save()
     ctx.scale(0.05, 0.05)
     ctx.translate(this.position.x, this.position.y)
-    ctx.rotate(this.velocity.heading())
+    ctx.rotate(toRadians(this.angle))
     ctx.beginPath()
     ctx.arc(0, 0, this.radius, 0, 2 * Math.PI)
     ctx.lineWidth = 5
@@ -287,39 +289,51 @@ class Pod {
     div.appendChild(this.createHtmlElement('p', 'Velocity angle: ' + Math.trunc(this.velocity.headingDegree())))
     div.appendChild(this.createHtmlElement('p', 'Head angle: ' + Math.trunc(this.angle)))
     div.appendChild(this.createHtmlElement('p', 'Thrust: ' + Math.trunc(this.lastthrust)))
+    div.appendChild(this.createHtmlElement('p', 'Current CP id: ' + this.currentCPId))
+    div.appendChild(this.createHtmlElement('p', 'Current Score: ' + this.score()))
   }
 
   move (thrust, turn) {
     var copy = this.rotateDegree(turn)
     var force = new Vector(1, 0).mult(thrust)
-    force = force.rotateDegree(copy.angle + turn)
-    copy.applyForce(force)
-    return copy.update()
+    force = force.rotateDegree(copy.angle)
+    return copy.applyForce(force).update()
   }
 
-  score () {
+  distScore () {
     var dist = this.position.dist(this.getCurrentCP().position)
     if (dist <= CP_RADII) {
       return 100
     } else {
-      return CP_RADII / dist
+      return 100 * (CP_RADII / dist)
     }
   }
 
-  best (n) {
-    if (n === 0) {
-      return this
+  angleScore () {
+    var desired = this.getCurrentCP().position.sub(this.position).normalize()
+    var forward = new Vector(1, 0).rotateDegree(this.angle)
+    var deltaAngle = toDegrees(forward.angleBetween(desired))
+    if (deltaAngle > 180) {
+      deltaAngle = 360 - deltaAngle
     }
+    return 100 * ((180 - deltaAngle) / 180)
+  }
+
+  score () {
+    return (this.distScore() + 2 * this.angleScore()) / 3
+  }
+
+  best (n) {
     var picked
     var score = 0
-    for (var thrust = 0; thrust <= 200; thrust += 50) {
+    for (var thrust = 50; thrust <= 200; thrust += 50) {
       for (var turn = 0; turn <= 18; turn += 18) {
         var move = this.move(thrust, turn)
-        var iterScore = move.best(n - 1)
+        var iterScore = (n === 0) ? move.score() : move.best(n - 1).score()
         if (!picked || score < iterScore) {
           picked = move
           score = iterScore
-        }        
+        }
       }
     }
     return picked
@@ -451,10 +465,11 @@ if (!PROD_ENV) {
     return array
   }
 
-  checkpoints = [new CheckPoint(0, VECTOR_ZERO), new CheckPoint(1, new Vector(5000, 5000))]
+  //checkpoints = [new CheckPoint(0, VECTOR_ZERO), new CheckPoint(1, new Vector(5000, 5000))]
+  checkpoints = generateCheckPoints(4)
   pods = generatePods(1)
 
-  var fps = 60
+  var fps = 25
   var now
   var then = Date.now()
   var interval = 1000 / fps
@@ -483,7 +498,10 @@ if (!PROD_ENV) {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.restore()
     for (var i = 0; i < pods.length; i++) {
+      // var start = Date.now()
       pods[i] = pods[i].best(2)
+      // var end = Date.now()
+      // console.log(end - start)
       pods[i].draw(canvas)
     }
     for (var j = 0; j < checkpoints.length; j++) {
