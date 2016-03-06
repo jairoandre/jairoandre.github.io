@@ -19,7 +19,7 @@ class Vector {
     this.y = y
   }
 
-  get () {
+  copy () {
     return new Vector(this.x, this.y)
   }
 
@@ -39,12 +39,21 @@ class Vector {
     return new Vector(this.x / n, this.y / n)
   }
 
+  rotateDegree (angle) {
+    var angleInRadians = toRadians(angle)
+    return new Vector(this.x + this.mag() * Math.cos(angleInRadians), this.y + this.mag() * Math.sin(angleInRadians))
+  }
+
   dist (v) {
     return Math.sqrt(Math.pow(v.x - this.x, 2) + Math.pow(v.y - this.y, 2))
   }
 
+  magSquare () {
+    return Math.pow(this.x, 2) + Math.pow(this.y, 2)
+  }
+
   mag () {
-    return Math.round(Math.sqrt(Math.pow(this.x, 2) + Math.pow(this.y, 2)))
+    return Math.round(Math.sqrt(this.magSquare()))
   }
 
   normalize () {
@@ -54,6 +63,10 @@ class Vector {
 
   dot (v) {
     return this.x * v.x + this.y * v.y
+  }
+
+  cross (v) {
+    return this.x * v.y - this.y * v.x
   }
 
   angleBetween (v) {
@@ -68,7 +81,8 @@ class Vector {
   }
 
   heading () {
-    return Math.atan2(this.y, this.x)
+    var heading = Math.atan2(this.y, this.x)
+    return heading < 0 ? (2 * Math.PI + heading) : heading
   }
 
   headingDegree () {
@@ -87,19 +101,19 @@ class Vector {
 
 class Polar {
 
-  constructor (r, theta) {
+  constructor (r, angle) {
     this.r = r
-    this.theta = theta
-    this.thetaInRadians = toRadians(theta)
+    this.angle = angle
+    this.angleInRadians = toRadians(angle)
   }
 
   toVector () {
-    return new Vector(this.r * Math.cos(this.thetaInRadians), this.r * Math.sin(this.thetaInRadians))
+    return new Vector(this.r * Math.cos(this.angleInRadians), this.r * Math.sin(this.angleInRadians))
   }
 
-  setTheta (theta) {
-    this.theta = theta
-    this.thetaInRadians = toRadians(theta)
+  setTheta (angle) {
+    this.angle = angle
+    this.angleInRadians = toRadians(angle)
     return this
   }
 }
@@ -159,8 +173,8 @@ class Pod {
     this.lastthrust = lastthrust === undefined ? 0 : lastthrust
   }
 
-  get () {
-    return new Pod(this.position.get(), this.velocity.get(), this.thrust.get(), this.angle, this.currentCPId, this.checkpoints, this.lastthrust, this.maxthrust)
+  copy () {
+    return new Pod(this.position.copy(), this.velocity.copy(), this.thrust.copy(), this.angle, this.currentCPId, this.checkpoints, this.lastthrust, this.maxthrust)
   }
 
   setCurrentCPId (currentCPId) {
@@ -175,16 +189,15 @@ class Pod {
     this.mass = mass
   }
 
-  setMaxspeed (maxspeed) {
-    this.maxspeed = maxspeed
-  }
-
-  setAngleVelocity (angleVelocity) {
-    this.angleVelocity = angleVelocity
-  }
-
-  setAngleAcceleration (angleAcceleration) {
-    this.angleAcceleration = angleAcceleration
+  rotateDegree (turn) {
+    var copy = this.copy()
+    copy.angle += turn
+    if (copy.angle >= 360) {
+      copy.angle = 360 - copy.angle
+    } else if (copy.angle < 0) {
+      copy.angle = 360 + copy.angle
+    }
+    return copy
   }
 
   setAngle (angle) {
@@ -192,7 +205,7 @@ class Pod {
   }
 
   update () {
-    var copy = this.get()
+    var copy = this.copy()
     copy.velocity = copy.velocity.add(copy.thrust).mult(copy.frictionCoeficient)
     copy.position = copy.position.add(copy.velocity)
     copy.lastthrust = copy.thrust.mag()
@@ -251,13 +264,13 @@ class Pod {
   }
 
   applyForce (force) {
-    var copy = this.get()
+    var copy = this.copy()
     copy.thrust = this.thrust.add(force.div(this.mass))
     return copy
   }
 
   applyFriction () {
-    var copy = this.get()
+    var copy = this.copy()
     copy.velocity = this.velocity.mult(this.frictionCoeficient)
     return copy
   }
@@ -271,13 +284,75 @@ class Pod {
   displayInfo (div) {
     div.appendChild(this.createHtmlElement('p', 'Position: ' + '(' + Math.round(this.position.x) + ', ' + Math.round(this.position.y) + ')'))
     div.appendChild(this.createHtmlElement('p', 'Velocity: ' + Math.trunc(this.velocity.mag())))
+    div.appendChild(this.createHtmlElement('p', 'Velocity angle: ' + Math.trunc(this.velocity.headingDegree())))
+    div.appendChild(this.createHtmlElement('p', 'Head angle: ' + Math.trunc(this.angle)))
     div.appendChild(this.createHtmlElement('p', 'Thrust: ' + Math.trunc(this.lastthrust)))
   }
 
-  seekForCP () {
-    var desired = this.getCurrentCP().position.sub(this.position).normalize().mult(this.maxspeed)
-    var steer = desired.sub(this.velocity).limit(this.maxthrust)
-    return this.applyForce(steer)
+  move (thrust, turn) {
+    var copy = this.rotateDegree(turn)
+    var force = new Vector(1, 0).mult(thrust)
+    force = force.rotateDegree(copy.angle + turn)
+    copy.applyForce(force)
+    return copy.update()
+  }
+
+  score () {
+    var dist = this.position.dist(this.getCurrentCP().position)
+    if (dist <= CP_RADII) {
+      return 100
+    } else {
+      return CP_RADII / dist
+    }
+  }
+
+  best (n) {
+    if (n === 0) {
+      return this
+    }
+    var picked
+    var score = 0
+    for (var thrust = 0; thrust <= 200; thrust += 50) {
+      for (var turn = 0; turn <= 18; turn += 18) {
+        var move = this.move(thrust, turn)
+        var iterScore = move.best(n - 1)
+        if (!picked || score < iterScore) {
+          picked = move
+          score = iterScore
+        }        
+      }
+    }
+    return picked
+  }
+
+  seekForCP (thrust) {
+    var copy = this.copy()
+    var target = copy.getCurrentCP()
+    var desired = target.position.sub(copy.position).normalize().mult(copy.maxspeed)
+    var steer = desired.sub(copy.velocity).limit(thrust)
+    copy.angle = steer.headingDegree()
+
+    /*
+        if (copy.angle === -1) {
+          copy.angle = steer.headingDegree()
+        } else {
+          var forward = new Vector(1, 0).rotateDegree(copy.angle)
+          var angleBetween = toDegrees(forward.angleBetween(steer.normalize()))
+          angleBetween = isNaN(angleBetween) ? 0 : angleBetween
+          if (angleBetween > 18) {
+            if (forward.cross(steer.normalize()) < 0) {
+              console.log('-18')
+              steer = new Vector(steer.mag(), 0).rotateDegree(copy.angle - 18)
+            } else {
+              console.log('+18')
+              steer = new Vector(steer.mag(), 0).rotateDegree(copy.angle + 18)
+            }
+          } else {
+            copy.angle = steer.headingDegree()
+          }
+        }
+    */
+    return copy.applyForce(steer)
   }
 }
 
@@ -376,7 +451,7 @@ if (!PROD_ENV) {
     return array
   }
 
-  checkpoints = generateCheckPoints(3)
+  checkpoints = [new CheckPoint(0, VECTOR_ZERO), new CheckPoint(1, new Vector(5000, 5000))]
   pods = generatePods(1)
 
   var fps = 60
@@ -408,8 +483,7 @@ if (!PROD_ENV) {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.restore()
     for (var i = 0; i < pods.length; i++) {
-      pods[i].maxthrust = thrust
-      pods[i] = pods[i].seekForCP().update()
+      pods[i] = pods[i].best(2)
       pods[i].draw(canvas)
     }
     for (var j = 0; j < checkpoints.length; j++) {
