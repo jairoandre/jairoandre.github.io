@@ -4,9 +4,9 @@
 // CONSTANTS
 // ///////////////////
 
-var RAD18 = 18 * Math.PI / 180
-var CP_RADII = 600
-var POD_RADII = 400
+const RAD18 = 18 * Math.PI / 180
+const CP_RADII = 600
+const POD_RADII = 400
 
 // ///////////////////
 // VECTOR CLASS
@@ -40,9 +40,9 @@ class Vector {
   }
 
   rotateDegree (angle) {
-    var angleInRadians = toRadians(angle)
-    var sin = Math.sin(angleInRadians)
-    var cos = Math.cos(angleInRadians)
+    let angleInRadians = toRadians(angle)
+    let sin = Math.sin(angleInRadians)
+    let cos = Math.cos(angleInRadians)
     return new Vector(this.x * cos - this.y * sin, this.x * sin + this.y * cos)
   }
 
@@ -59,8 +59,12 @@ class Vector {
   }
 
   normalize () {
-    var mag = this.mag()
+    let mag = this.mag()
     return mag === 0 ? this : this.div(mag)
+  }
+
+  norm () {
+    return this.normalize()
   }
 
   dot (v) {
@@ -83,7 +87,7 @@ class Vector {
   }
 
   heading () {
-    var heading = Math.atan2(this.y, this.x)
+    let heading = Math.atan2(this.y, this.x)
     return heading < 0 ? (2 * Math.PI + heading) : heading
   }
 
@@ -133,7 +137,7 @@ class CheckPoint {
   }
 
   draw (canvas) {
-    var ctx = canvas.getContext('2d')
+    let ctx = canvas.getContext('2d')
     ctx.save()
     ctx.scale(0.05, 0.05)
     ctx.translate(this.position.x, this.position.y)
@@ -156,6 +160,10 @@ class CheckPoint {
 // POD CLASS
 // ///////////////////
 
+const maxspeed = 1127
+const maxthrust = 200
+const frictionCoeficient = 0.85
+
 class Pod {
 
   constructor (position, velocity, thrust, angle, currentCPId, checkpoints, lastthrust) {
@@ -165,34 +173,30 @@ class Pod {
     this.angle = angle
     this.currentCPId = currentCPId === undefined ? 1 : currentCPId
     this.checkpoints = checkpoints === undefined ? [] : checkpoints
-    this.mass = 1
+    this.lastthrust = lastthrust === undefined ? 0 : lastthrust
     this.radius = POD_RADII
-    this.maxspeed = 1127
-    this.maxthrust = 200
-    this.frictionCoeficient = 0.85
+    this.mass = 1
+    this.maxspeed = maxspeed
+    this.maxthrust = maxthrust
+    this.frictionCoeficient = frictionCoeficient
     this.angleVelocity = 0
     this.angleAcceleration = 0
-    this.lastthrust = lastthrust === undefined ? 0 : lastthrust
   }
 
   copy () {
     return new Pod(this.position.copy(), this.velocity.copy(), this.thrust.copy(), this.angle, this.currentCPId, this.checkpoints, this.lastthrust, this.maxthrust)
   }
 
-  setCurrentCPId (currentCPId) {
-    this.currentCPId = currentCPId
+  angleToCPDeg () {
+    return toDegrees(this.getCurrentCP().position.sub(this.position).normalize().heading())
   }
 
-  setCheckpoints (checkpoints) {
-    this.checkpoints = checkpoints
-  }
-
-  setMass (mass) {
-    this.mass = mass
+  distToCp () {
+    return this.position.dist(this.getCurrentCP().position)
   }
 
   rotateDegree (turn) {
-    var copy = this.copy()
+    let copy = this.copy()
     copy.angle += turn
     if (copy.angle >= 360) {
       copy.angle = 360 - copy.angle
@@ -202,14 +206,11 @@ class Pod {
     return copy
   }
 
-  setAngle (angle) {
-    this.angle = angle
-  }
-
   update () {
-    var copy = this.copy()
-    copy.velocity = copy.velocity.add(copy.thrust).mult(copy.frictionCoeficient)
+    let copy = this.copy()
+    copy.velocity = copy.velocity.add(copy.thrust)
     copy.position = copy.position.add(copy.velocity)
+    copy.velocity = copy.velocity.mult(copy.frictionCoeficient)
     copy.lastthrust = copy.thrust.mag()
     copy.thrust = copy.thrust.mult(0)
     if (copy.innerCP()) {
@@ -225,9 +226,73 @@ class Pod {
   getCurrentCP () {
     return this.checkpoints[this.currentCPId]
   }
+  applyForce (force) {
+    let copy = this.copy()
+    copy.thrust = this.thrust.add(force.div(this.mass))
+    return copy
+  }
+
+  applyFriction () {
+    let copy = this.copy()
+    copy.velocity = this.velocity.mult(this.frictionCoeficient)
+    return copy
+  }
+
+  move (thrust, turn) {
+    let copy = this.rotateDegree(turn)
+    let force = new Vector(1, 0).mult(thrust)
+    force = force.rotateDegree(copy.angle)
+    return copy.applyForce(force).update()
+  }
+
+  velocityAngleScore () {
+    let desiredVelocity = this.getCurrentCP().position.sub(this.position).norm().mult(maxspeed)
+    let deltaAngle = toDegrees(Math.abs(desiredVelocity.heading() - this.velocity.heading()))
+    if (deltaAngle > 180) {
+      deltaAngle = 360 - deltaAngle
+    }
+    return 100 * ((180 - deltaAngle) / 180)
+  }
+
+  distScore () {
+    let dist = this.position.dist(this.getCurrentCP().position)
+    if (dist <= CP_RADII) {
+      return 100
+    } else {
+      return 100 * (CP_RADII / dist)
+    }
+  }
+
+  angleScore () {
+    let deltaAngle = Math.abs(this.angle - this.angleToCPDeg())
+    if (deltaAngle > 180) {
+      deltaAngle = 360 - deltaAngle
+    }
+    return 100 * ((180 - deltaAngle) / 180)
+  }
+
+  score () {
+    return (this.distScore() + this.angleScore() + this.velocityAngleScore()) / 3
+  }
+
+  best (n) {
+    let picked
+    let score = 0
+    for (let thrust = 0; thrust <= 200; thrust += 50) {
+      for (let turn = 0; turn <= 18; turn++) {
+        let move = this.move(thrust, turn)
+        let iterScore = (n === 0) ? move.score() : move.best(n - 1).score()
+        if (!picked || score < iterScore) {
+          picked = move
+          score = iterScore
+        }
+      }
+    }
+    return picked
+  }
 
   draw (canvas) {
-    var ctx = canvas.getContext('2d')
+    let ctx = canvas.getContext('2d')
     ctx.save()
     ctx.scale(0.05, 0.05)
     ctx.translate(this.position.x, this.position.y)
@@ -265,20 +330,8 @@ class Pod {
     }
   }
 
-  applyForce (force) {
-    var copy = this.copy()
-    copy.thrust = this.thrust.add(force.div(this.mass))
-    return copy
-  }
-
-  applyFriction () {
-    var copy = this.copy()
-    copy.velocity = this.velocity.mult(this.frictionCoeficient)
-    return copy
-  }
-
   createHtmlElement (element, text) {
-    var elem = document.createElement(element)
+    let elem = document.createElement(element)
     elem.innerHTML = text
     return elem
   }
@@ -287,85 +340,19 @@ class Pod {
     div.appendChild(this.createHtmlElement('p', 'Position: ' + '(' + Math.round(this.position.x) + ', ' + Math.round(this.position.y) + ')'))
     div.appendChild(this.createHtmlElement('p', 'Velocity: ' + Math.trunc(this.velocity.mag())))
     div.appendChild(this.createHtmlElement('p', 'Velocity angle: ' + Math.trunc(this.velocity.headingDegree())))
+    div.appendChild(this.createHtmlElement('p', 'Target angle: ' + Math.trunc(toDegrees(this.getCurrentCP().position.sub(this.position).normalize().heading()))))
     div.appendChild(this.createHtmlElement('p', 'Head angle: ' + Math.trunc(this.angle)))
     div.appendChild(this.createHtmlElement('p', 'Thrust: ' + Math.trunc(this.lastthrust)))
     div.appendChild(this.createHtmlElement('p', 'Current CP id: ' + this.currentCPId))
     div.appendChild(this.createHtmlElement('p', 'Current Score: ' + this.score()))
   }
 
-  move (thrust, turn) {
-    var copy = this.rotateDegree(turn)
-    var force = new Vector(1, 0).mult(thrust)
-    force = force.rotateDegree(copy.angle)
-    return copy.applyForce(force).update()
-  }
-
-  distScore () {
-    var dist = this.position.dist(this.getCurrentCP().position)
-    if (dist <= CP_RADII) {
-      return 100
-    } else {
-      return 100 * (CP_RADII / dist)
-    }
-  }
-
-  angleScore () {
-    var desired = this.getCurrentCP().position.sub(this.position).normalize()
-    var forward = new Vector(1, 0).rotateDegree(this.angle)
-    var deltaAngle = toDegrees(forward.angleBetween(desired))
-    if (deltaAngle > 180) {
-      deltaAngle = 360 - deltaAngle
-    }
-    return 100 * ((180 - deltaAngle) / 180)
-  }
-
-  score () {
-    return (this.distScore() + 2 * this.angleScore()) / 3
-  }
-
-  best (n) {
-    var picked
-    var score = 0
-    for (var thrust = 50; thrust <= 200; thrust += 50) {
-      for (var turn = 0; turn <= 18; turn += 18) {
-        var move = this.move(thrust, turn)
-        var iterScore = (n === 0) ? move.score() : move.best(n - 1).score()
-        if (!picked || score < iterScore) {
-          picked = move
-          score = iterScore
-        }
-      }
-    }
-    return picked
-  }
-
   seekForCP (thrust) {
-    var copy = this.copy()
-    var target = copy.getCurrentCP()
-    var desired = target.position.sub(copy.position).normalize().mult(copy.maxspeed)
-    var steer = desired.sub(copy.velocity).limit(thrust)
+    let copy = this.copy()
+    let target = copy.getCurrentCP()
+    let desired = target.position.sub(copy.position).normalize().mult(copy.maxspeed)
+    let steer = desired.sub(copy.velocity).limit(thrust)
     copy.angle = steer.headingDegree()
-
-    /*
-        if (copy.angle === -1) {
-          copy.angle = steer.headingDegree()
-        } else {
-          var forward = new Vector(1, 0).rotateDegree(copy.angle)
-          var angleBetween = toDegrees(forward.angleBetween(steer.normalize()))
-          angleBetween = isNaN(angleBetween) ? 0 : angleBetween
-          if (angleBetween > 18) {
-            if (forward.cross(steer.normalize()) < 0) {
-              console.log('-18')
-              steer = new Vector(steer.mag(), 0).rotateDegree(copy.angle - 18)
-            } else {
-              console.log('+18')
-              steer = new Vector(steer.mag(), 0).rotateDegree(copy.angle + 18)
-            }
-          } else {
-            copy.angle = steer.headingDegree()
-          }
-        }
-    */
     return copy.applyForce(steer)
   }
 }
@@ -403,35 +390,35 @@ var checkpoints = []
 // CODINGAME
 // ///////////////////
 if (PROD_ENV) {
-  var laps = parseInt(readline())
-  var checkpointCount = parseInt(readline())
+  let laps = parseInt(readline())
+  let checkpointCount = parseInt(readline())
 
   for (var i = 0; i < checkpointCount; i++) {
-    var inputs = readline().split(' ')
-    var checkpointX = parseInt(inputs[0])
-    var checkpointY = parseInt(inputs[1])
+    let inputs = readline().split(' ')
+    let checkpointX = parseInt(inputs[0])
+    let checkpointY = parseInt(inputs[1])
     checkpoints.push(new Vector(checkpointX, checkpointY))
   }
 
   // game loop
   while (true) {
-    for (var i = 0; i < 4; i++) {
-      var inputs = readline().split(' ')
+    for (let i = 0; i < 4; i++) {
+      let inputs = readline().split(' ')
 
-      var x = parseInt(inputs[0])
-      var y = parseInt(inputs[1])
+      let x = parseInt(inputs[0])
+      let y = parseInt(inputs[1])
 
-      var position = new Vector(x, y)
+      let position = new Vector(x, y)
 
-      var vx = parseInt(inputs[2])
-      var vy = parseInt(inputs[3])
-      var velocity = new Vector(vx, vy)
+      let vx = parseInt(inputs[2])
+      let vy = parseInt(inputs[3])
+      let velocity = new Vector(vx, vy)
 
-      var angle = parseInt(inputs[4])
+      let angle = parseInt(inputs[4])
 
-      var ncpid = parseInt(inputs[5])
+      let ncpid = parseInt(inputs[5])
 
-      var pod = new Pod(position, velocity, new Vector(0, 0), checkpoints[ncpid], checkpoints[(ncpid + 1) % checkpointCount])
+      let pod = new Pod(position, velocity, new Vector(0, 0), checkpoints[ncpid], checkpoints[(ncpid + 1) % checkpointCount])
 
       pods.push(pod)
     }
@@ -449,39 +436,41 @@ if (PROD_ENV) {
 // ///////////////////
 
 if (!PROD_ENV) {
-  var generateCheckPoints = function (n) {
-    var array = []
+  let generateCheckPoints = function (n) {
+    let array = []
     for (var i = 0; i < n; i++) {
       array.push(new CheckPoint(i, getRandomPosition(1200, 14000, 1200, 7800)))
     }
     return array
   }
 
-  var generatePods = function (n) {
-    var array = []
+  let generatePods = function (n) {
+    let array = []
     for (var i = 0; i < n; i++) {
-      array.push(new Pod(getRandomPosition(1200, 14000, 1200, 7800), VECTOR_ZERO, VECTOR_ZERO, -1, 1, checkpoints))
+      let newPod = new Pod(getRandomPosition(1200, 14000, 1200, 7800), VECTOR_ZERO, VECTOR_ZERO, -1, 1, checkpoints)
+      newPod.angle = newPod.angleToCPDeg()
+      array.push(newPod)
     }
     return array
   }
 
-  //checkpoints = [new CheckPoint(0, VECTOR_ZERO), new CheckPoint(1, new Vector(5000, 5000))]
+  // checkpoints = [new CheckPoint(0, VECTOR_ZERO), new CheckPoint(1, new Vector(5000, 5000))]
   checkpoints = generateCheckPoints(4)
   pods = generatePods(1)
 
-  var fps = 25
-  var now
-  var then = Date.now()
-  var interval = 1000 / fps
-  var delta
+  let fps = 1
+  let now
+  let then = Date.now()
+  let interval = 1000 / fps
+  let delta
 
-  var thrust = 60
+  let thrust = 60
 
-  var thrustInput = document.getElementById('thrust')
+  let thrustInput = document.getElementById('thrust')
 
   thrustInput.value = thrust
 
-  var fpsInput = document.getElementById('fps')
+  let fpsInput = document.getElementById('fps')
 
   fpsInput.value = fps
 
@@ -491,16 +480,16 @@ if (!PROD_ENV) {
     interval = 1000 / fps
   }
 
-  var drawFollowingBall = function () {
-    var canvas = document.getElementById('mycanvas')
-    var ctx = canvas.getContext('2d')
+  let drawFollowingBall = function () {
+    let canvas = document.getElementById('mycanvas')
+    let ctx = canvas.getContext('2d')
     ctx.save()
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.restore()
     for (var i = 0; i < pods.length; i++) {
-      // var start = Date.now()
-      pods[i] = pods[i].best(2)
-      // var end = Date.now()
+      // let start = Date.now()
+      pods[i] = pods[i].best(0)
+      // let end = Date.now()
       // console.log(end - start)
       pods[i].draw(canvas)
     }
@@ -508,13 +497,13 @@ if (!PROD_ENV) {
       checkpoints[j].draw(canvas)
     }
 
-    var info = document.getElementById('info')
+    let info = document.getElementById('info')
     info.innerHTML = ''
     pods[0].displayInfo(info)
   // this.thrust = mousePosition.sub(this.position).normalize().mult(0.5)
   }
 
-  var animate = function (highResTimestamp) {
+  let animate = function (highResTimestamp) {
     requestAnimationFrame(animate)
     now = Date.now()
     delta = now - then
@@ -524,19 +513,19 @@ if (!PROD_ENV) {
     }
   }
 
-  var getMousePos = function (canvas, evt) {
-    var rect = canvas.getBoundingClientRect()
+  let getMousePos = function (canvas, evt) {
+    let rect = canvas.getBoundingClientRect()
     return new Vector(evt.clientX - rect.left, evt.clientY - rect.top).mult(20)
   }
 
-  var mousePosition = VECTOR_ZERO
+  let mousePosition = VECTOR_ZERO
 
-  var addMouseEventListener = function (canvas) {
+  let addMouseEventListener = function (canvas) {
     canvas.addEventListener('mousemove', function (evt) {
       mousePosition = getMousePos(canvas, evt)
     }, false)
   }
 
   // addMouseEventListener(document.getElementById('mycanvas'))
-  var frameId = requestAnimationFrame(animate)
+  let frameId = requestAnimationFrame(animate)
 }
